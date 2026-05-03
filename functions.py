@@ -1,0 +1,408 @@
+from pykeen.pipeline import pipeline
+from pykeen.triples import TriplesFactory
+from pykeen.predict import predict_target
+import torch
+import pandas as pd
+import random
+import numpy as np
+
+import time
+
+
+SEED = 42
+
+# Set all random seeds to 42
+random.seed = SEED
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+
+
+def sample_negative_triples(head, tail, num_samples, all_triples, entities, relations, SEED=42):
+  '''
+  Inputs:
+  - head (int): head ID of the triple
+  - tail (int): tail ID of the triple
+  - num_samples (int): number of samples
+  - all_triples (torch.tensor): tensor with all triples, containing entity and relation IDs
+  - entities (list): list of entity IDs
+  - relations (list): list of relation IDs
+  Outputs:
+  - negative_head_samples (torch.tensor): tensor with k triples sampled from the negative neighbourhood of the head
+  - negative_tail_samples (torch.tensor): tensor with k triples sampled from the negative neighbourhood of the tail
+  '''
+
+  # Extract all the positive triples
+  head_all_triples = all_triples[all_triples[:,0]==head] # head
+  tail_all_triples = all_triples[all_triples[:,2]==tail] # tail
+
+  # Number of all positive triples
+  num_positive_head_triples = len(head_all_triples) # head
+  num_positive_tail_triples = len(tail_all_triples) # tail
+  # Number of all possible triples
+  num_possible_triples = len(entities) * len(relations)
+
+  # Size of the negative neighbourhood
+  size_neg_nb_head = num_possible_triples - num_positive_head_triples # head
+  size_neg_nb_tail = num_possible_triples - num_positive_tail_triples # tail
+
+  # Number of entities and relations
+  E = len(entities)
+  R = len(relations)
+
+  # Get the indexes of all positive triples
+  positive_head_indexes = head_all_triples[:, 1] * E + head_all_triples[:, 2]  # head
+  positive_tail_indexes = tail_all_triples[:, 0] * R + tail_all_triples[:, 1]  # tail
+
+  # All possible indexes
+  all_indexes = torch.arange(num_possible_triples, device=all_triples.device)
+
+  # Create a positive mask for both head and tail
+  mask_head = torch.ones(num_possible_triples, dtype=torch.bool, device=all_triples.device) # head
+  mask_tail = torch.ones(num_possible_triples, dtype=torch.bool, device=all_triples.device) # tail
+
+  # Mask positive triples as false
+  mask_head[positive_head_indexes] = False  # head
+  mask_tail[positive_tail_indexes] = False  # tail
+
+  # Apply the Mask
+  negative_head_indexes = all_indexes[mask_head] # head
+  negative_tail_indexes = all_indexes[mask_tail] # tail
+
+  # Randomly permute the negative indexes
+  torch.manual_seed(SEED)
+  torch.cuda.manual_seed_all(SEED)
+  perm_head = torch.randperm(negative_head_indexes.size(0), device=negative_head_indexes.device)[:num_samples]
+  perm_tail = torch.randperm(negative_tail_indexes.size(0), device=negative_tail_indexes.device)[:num_samples]
+
+  # Get the sampled indexes
+  sample_indexes_head = negative_head_indexes[perm_head]
+  sample_indexes_tail = negative_tail_indexes[perm_tail]
+
+  # Reconstruct the triples
+  # Recover relation and tail for the triples with fixed head
+  relations_head = sample_indexes_head // E
+  tails = sample_indexes_head % E
+
+  # Recover head and relation for the triples with fixed tail
+  heads = sample_indexes_tail // R
+  relations_tail = sample_indexes_tail % R
+
+  # Stack into (num_samples, 3) tensor with [head, relation, tail] triples
+  negative_head_samples = torch.stack([torch.full_like(relations_head, head), relations_head, tails], dim=1) # head
+  negative_tail_samples = torch.stack([heads, relations_tail, torch.full_like(relations_tail, tail)], dim=1) # tail
+
+  return negative_head_samples, negative_tail_samples, size_neg_nb_head, size_neg_nb_tail
+
+
+
+def approximate_relik(triple, train_tf, model, num_samples, SEED=42):
+  '''
+  Function that computes the approximations for the KGE reliability score ReliK: ReliK_lb and ReliK_apx
+  Inputs:
+  - train_tf (TriplesFactory): pykeen training object with triples and IDs
+  - triple (list/tensor of 3 elements): triple with head, relation, tail ID to compute the relik score of
+  - model (pykeen model): pykeen model used to score the triples
+  - num_samples (int): number of samples to use in the negative sampling (k in the algorithm)
+  - SEED: random seed
+  Outputs:
+  - relik_lb (float): lower bound of the reliability score
+  - relik_apx (float): approximated reliability score
+  '''
+
+
+  # Entities
+  entities = list(train_tf.entity_id_to_label.keys())
+
+  # Relations
+  relations = list(train_tf.relation_id_to_label.keys())
+
+  # All triples
+  all_triples = train_tf.mapped_triples
+
+  # Setup
+  head = triple[0]
+  tail = triple[2]
+  relation = triple[1]
+
+  # Sample k=num_samples times from the negative neighborhoods of the head and tail
+  negative_head_samples, negative_tail_samples, size_neg_nb_head, size_neg_nb_tail = sample_negative_triples(head, tail, num_samples, all_triples, entities, relations, SEED=SEED)
+
+  # Score of the true triple
+  true_triple = torch.tensor([[head, relation, tail]], device=model.device)
+  true_score = model.score_hrt(true_triple).item()
+
+  # Head negative neighbourhood scores
+  head_scores = model.score_hrt(negative_head_samples.to(model.device))
+  # Get the rank of the triple among the sampled negative head neighbourhood triples
+  rank_head = 1 + (head_scores > true_score).sum().item()
+
+  # Tail negative neighbourhood scores
+  tail_scores = model.score_hrt(negative_tail_samples.to(model.device))
+  # Get the rank of the triple among the sampled negative tail neighbourhood triples
+  rank_tail = 1 + (tail_scores > true_score).sum().item()
+
+  #print(f"Head rank: {rank_head}")
+  #print(f"Tail rank: {rank_tail}")
+
+  # Compute relik lower bound
+  relik_lb = 0.5 * (1/(rank_head + size_neg_nb_head - num_samples) + 1/(rank_tail + size_neg_nb_tail - num_samples))
+
+  # Compute relik approximation
+  relik_apx = 0.5 * (1/(rank_head * size_neg_nb_head / num_samples) + 1/(rank_tail * size_neg_nb_tail / num_samples))
+
+  return relik_lb, relik_apx
+
+
+
+
+
+
+
+def make_prediction(model, training, head=None, relation=None, tail=None):
+
+  # Check if there is only one missing element in the triple
+  if [head, relation, tail].count(None)!=1:
+    raise ValueError('Exactly two elements of the triple need to be defined (not None) in order to make a prediction.')
+
+  # Case 1: missing head
+  if head is None:
+    pred = predict_target(
+      model = model,
+      relation = training.relation_id_to_label[relation],
+      tail = training.entity_id_to_label[tail],
+      triples_factory = training,
+    )
+
+  # Case 2: missing relation
+  if relation is None:
+    pred = predict_target(
+      model = model,
+      head = training.entity_id_to_label[head],
+      tail = training.entity_id_to_label[tail],
+      triples_factory = training,
+    )
+
+  # Case 3: missing tail
+  if tail is None:
+    pred = predict_target(
+      model = model,
+      head = training.entity_id_to_label[head],
+      relation = training.relation_id_to_label[relation],
+      triples_factory = training,
+    )
+
+  return pred
+
+
+
+
+def compute_scores(model, training, num_candidates, num_samples, head=None, relation=None, tail=None, normalization='sigmoid', verbose=False, SEED=42):
+
+  # Check if there is only one missing element in the triple
+  if [head, relation, tail].count(None)!=1:
+    raise ValueError('Exactly two elements of the triple need to be defined (not None) in order to make a prediction.')
+
+  if verbose:
+    print(f'Starting computation of model and ReliK scores, considering the top {num_candidates} predicted candidates')
+    print(f'and sampling {num_samples} negative triples in the ReliK score computations.\n')
+
+  # Predict the missing element
+  pred = make_prediction(model, training, head, relation, tail)
+
+  # Extract the IDs, scores, labels of the predicted elements
+  df = pred.df
+  IDs = df.filter(like="_id").iloc[:, 0]
+  model_scores = df["score"]
+  labels = df.filter(like="_label").iloc[:, 0]
+
+  #print('IDs:')
+  #print(IDs)
+
+  # Normalize the embedding scores
+  if normalization == 'min-max':
+    min_s = model_scores.min()
+    max_s = model_scores.max()
+    model_scores = (model_scores-min_s) / (max_s-min_s)
+  if normalization == 'sigmoid':
+    model_scores = 1/(1+np.exp(-model_scores))
+    model_scores = model_scores
+  else:
+    raise ValueError('"normalization" must be "sigmoid" or "min-max"')
+
+  # Build id to entity/relation dictionaries
+  id_to_entity = {id: entity for entity, id in training.entity_to_id.items()}
+  id_to_relation = {id: relation for relation, id in training.relation_to_id.items()}
+
+  # Entities, relations
+  entities, relations = list(id_to_entity.keys()), list(id_to_relation.keys())
+
+  # Get the target's label
+  target = 'head' if head is None else 'relation' if relation is None else 'tail'
+
+  if verbose:
+    print("Candidates:")
+    print(df.iloc[:num_candidates,:])
+    #print(f"Target={target}")
+
+  # For the first num_candidates triples, approximate the ReliK score of their neighbourhood
+  relik_scores = np.zeros(num_candidates)
+
+  for i in range(num_candidates):
+
+    if target=='head':
+      triple = [int(IDs.iloc[i]), relation, tail]
+    if target=='relation':
+      triple = [head, int(IDs.iloc[i]), tail]
+    if target=='tail':
+      triple = [head, relation, int(IDs.iloc[i])]
+
+    if verbose:
+      print(f'\nApproximating the ReliK score for triple {[id_to_entity[triple[0]], id_to_relation[triple[1]], id_to_entity[triple[2]]]}')
+      print(f'Triple IDs = {triple}')
+
+    # Compute relik scores
+    _, relik_scores[i] = approximate_relik(triple, training, model, num_samples, SEED=SEED)
+    if verbose:
+      print(f"Relik score = {relik_scores[i]}")
+
+    result = {
+      "model_scores": model_scores[:num_candidates].to_numpy(),
+      "relik_scores": relik_scores,
+      "prediction": pred.df[:num_candidates]
+    }
+
+  return result
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def approximate_local_relik(triple, model, training, num_nb, num_samples, entities, relations, target='head', tail=None, verbose=False):
+
+  # Make sure the value of the target variable is valid
+  if target not in ['head', 'relation', 'tail']:
+    raise ValueError('target must be "head", "relation" or "tail"')
+
+  # Target to position in triple dictionary
+  target_to_pos = {'head':0, 'relation':1, 'tail':2}
+
+  # Retrieve the location of the target in the triple
+  target_pos = target_to_pos[target]
+
+  # Get the triples that share the predicted element with the candidate triple
+  similar_triples = training.mapped_triples[training.mapped_triples[:,target_pos]==triple[target_pos]]
+
+  if verbose:
+    #print(f"Target position: {target_pos}")
+    print(f"Number of similar triples: {len(similar_triples)}")
+    #print(f"Similar triples: {similar_triples}")
+
+  # Get the min between num_nb and the number of similar triples
+  num_nb = min(num_nb, len(similar_triples))
+
+  # Sample num_nb times from similar_triples
+  similar_triples = random.sample(list(similar_triples), num_nb)
+
+  # Compute the ReliK score for all similar triples
+  relik_scores = np.zeros(len(similar_triples))
+  for i, similar_triple in enumerate(similar_triples):
+    _, relik_apx = approximate_relik(similar_triple, model, num_samples, entities, relations, training.mapped_triples)
+    if verbose:
+      print(f"{i}: relik={relik_apx}")
+    relik_scores[i] = relik_apx
+
+  # Return the median ReliK score of the similar triples
+  return np.median(relik_scores)
+
+
+
+
+def compute_scores2(model, training, num_candidates, num_nb, num_samples, head=None, relation=None, tail=None, normalization='sigmoid', verbose=False):
+
+  # Check if there is only one missing element in the triple
+  if [head, relation, tail].count(None)!=1:
+    raise ValueError('Exactly two elements of the triple need to be defined (not None) in order to make a prediction.')
+
+  if verbose:
+    print(f'Starting computation of model and ReliK scores, considering the top {num_candidates} predicted candidates, {num_nb} similar neighbours')
+    print(f'and sampling {num_samples} negative triples in the ReliK score computations.\n')
+
+  # Predict the missing element
+  pred = make_prediction(model, training, head, relation, tail)
+
+  # Extract the IDs, scores, labels of the predicted elements
+  df = pred.df
+  IDs = df.filter(like="_id").iloc[:, 0]
+  model_scores = df["score"]
+  labels = df.filter(like="_label").iloc[:, 0]
+
+  #print('IDs:')
+  #print(IDs)
+
+  # Normalize the embedding scores
+  if normalization == 'min-max':
+    min_s = model_scores.min()
+    max_s = model_scores.max()
+    model_scores = (model_scores-min_s) / (max_s-min_s)
+  if normalization == 'sigmoid':
+    model_scores = 1/(1+np.exp(-model_scores))
+    model_scores = model_scores
+  else:
+    raise ValueError('"normalization" must be "sigmoid" or "min-max"')
+
+  # Build id to entity/relation dictionaries
+  id_to_entity = {id: entity for entity, id in training.entity_to_id.items()}
+  id_to_relation = {id: relation for relation, id in training.relation_to_id.items()}
+
+  # Entities, relations
+  entities, relations = list(id_to_entity.keys()), list(id_to_relation.keys())
+
+  # Get the target's label
+  target = 'head' if head is None else 'relation' if relation is None else 'tail'
+
+  if verbose:
+    print("Candidates:")
+    print(df.iloc[:num_candidates,:])
+    #print(f"Target={target}")
+
+  # For the first num_candidates triples, approximate the ReliK score of their neighbourhood
+  relik_scores = np.zeros(num_candidates)
+
+  for i in range(num_candidates):
+
+    if target=='head':
+      triple = [int(IDs.iloc[i]), relation, tail]
+    if target=='relation':
+      triple = [head, int(IDs.iloc[i]), tail]
+    if target=='tail':
+      triple = [head, relation, int(IDs.iloc[i])]
+
+    if verbose:
+      print(f'\nApproximating the ReliK scores for positive triples similar to the triple {[id_to_entity[triple[0]], id_to_relation[triple[1]], id_to_entity[triple[2]]]}')
+      print(f'Triple IDs = {triple}')
+
+    # Compute relik scores
+    relik_scores[i] = approximate_local_relik(triple, model, training, num_nb, num_samples, entities, relations, target, verbose=verbose)
+
+  return model_scores[:num_candidates].to_numpy(), relik_scores
+
+
+
+
+def combine_scores(model_scores, relik_scores, lambda_):
+  return model_scores * lambda_ + relik_scores * (1-lambda_)
