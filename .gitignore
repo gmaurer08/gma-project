@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Others
+pykeen_results/
+fb15k-237/
+results/
+/discard.txt

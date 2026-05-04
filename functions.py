@@ -406,3 +406,38 @@ def compute_scores2(model, training, num_candidates, num_nb, num_samples, head=N
 
 def combine_scores(model_scores, relik_scores, lambda_):
   return model_scores * lambda_ + relik_scores * (1-lambda_)
+
+
+
+
+
+
+# Check if the true head is in the predictions
+def hit_at_k(pred, true_head, k):
+    return int(true_head in pred[:k])
+
+# Evaluate combined scores using convex combination
+def evaluate_combined_scores(predictions, true_head, lambda_):
+
+    # Combine model scores and ReliK scores
+    predictions['combined'] = combine_scores(predictions['norm_model'], predictions['relik'], lambda_)
+
+    # Sort predictions by combined score
+    predictions.sort_values(by=['combined'], ascending=False, inplace=True)
+
+    # Evaluate the hits@1 of the combined model scores
+    pred = list(predictions.filter(like="_id").iloc[:, 0])
+
+    # See if the right prediction is in the top 1, 3, 10 candidates
+    hit_at_1 = hit_at_k(pred, true_head, 1)
+    hit_at_3 = hit_at_k(pred, true_head, 3)
+    hit_at_5 = hit_at_k(pred, true_head, 5)
+    hit_at_10 = hit_at_k(pred, true_head, 10)
+
+    return {
+        'predictions': predictions,
+        'hit_at_1': hit_at_1,
+        'hit_at_3': hit_at_3,
+        'hit_at_5': hit_at_5,
+        'hit_at_10': hit_at_10
+    }
