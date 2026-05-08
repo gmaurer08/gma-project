@@ -220,13 +220,14 @@ def compute_scores(model, training, num_candidates, num_samples, head=None, rela
 
   #print('IDs:')
   #print(IDs)
+  #print(normalization)
 
   # Normalize the embedding scores
   if normalization == 'min-max':
     min_s = model_scores.min()
     max_s = model_scores.max()
     model_scores = (model_scores-min_s) / (max_s-min_s)
-  if normalization == 'sigmoid':
+  elif normalization == 'sigmoid':
     model_scores = 1/(1+np.exp(-model_scores))
     model_scores = model_scores
   else:
