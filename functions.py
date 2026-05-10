@@ -52,6 +52,23 @@ def extract_types(text_triples):
     return head_types, tail_types
 
 
+# Validate tail 
+def check_tail_type_valid(relation, tail, tail_types):
+    #print("Relation: ",relation)
+    #print("Tail: ",tail)
+    # Extract the tail type
+    paths = relation.split('.')
+    first = paths[0].strip('/').split('/')
+    last = paths[-1].strip('/').split('/')
+    #print(first)
+    #print(last)
+    tail_type = last[2]
+    # Check if the tail type is valid for the relation
+    if tail_type in tail_types[tail]:
+        return True
+    else:
+        return False
+
 
 def sample_negative_triples(head, tail, num_samples, all_triples, entities, relations, SEED=42):
   '''
@@ -231,8 +248,7 @@ def make_prediction(model, training, head=None, relation=None, tail=None):
 
 
 
-
-def compute_scores(model, training, num_candidates, num_samples, head=None, relation=None, tail=None, verbose=False, SEED=42):
+def compute_scores(model, training, num_candidates, num_samples, tail_types, head=None, relation=None, tail=None, verbose=False, SEED=42):
 
   # Check if there is only one missing element in the triple
   if [head, relation, tail].count(None)!=1:
@@ -246,10 +262,22 @@ def compute_scores(model, training, num_candidates, num_samples, head=None, rela
   pred = make_prediction(model, training, head, relation, tail)
 
   # Extract the IDs, scores, labels of the predicted elements
-  df = pred.df
+  df = pred.df.copy()
   IDs = df.filter(like="_id").iloc[:, 0]
   model_scores = df["score"]
   labels = df.filter(like="_label").iloc[:, 0]
+
+  #print(df.columns)
+
+  # Filter out invalid tails
+  for row in range(len(labels)):
+    relation_str = training.relation_id_to_label[relation]
+    tail_str = df['tail_label'][row]
+    #print(f"Relation: {relation_str}, Tail: {tail_str}")
+    if not check_tail_type_valid(relation_str, tail_str, tail_types):
+      df.drop(row, inplace=True)
+
+  num_candidates = min(num_candidates, len(df))
 
   #print('IDs:')
   #print(IDs)
@@ -299,13 +327,13 @@ def compute_scores(model, training, num_candidates, num_samples, head=None, rela
     # Min-max ReliK normalization
     min_r = relik_scores.min()
     max_r = relik_scores.max()
-    min_max_relik = (relik_scores-min_r) / (max_r-min_r)
+    min_max_relik = (relik_scores-min_r) / (max_r-min_r) if max_r-min_r!=0 else np.ones(len(relik_scores))
 
     # Sigmoid model normalization
     sigmoid_model = 1/(1+np.exp(-model_scores))
 
     # Take the data frame of predictions with the first num_candidates candidates
-    prediction = pred.df[:num_candidates].copy()
+    prediction = df[:num_candidates].copy()
     # Add relik and combined score columns to the prediction df
     prediction.loc[:,'min_max_model'] = min_max_model[:num_candidates].to_numpy()
     prediction.loc[:,'min_max_relik'] = min_max_relik
