@@ -5,6 +5,7 @@ import torch
 import pandas as pd
 import random
 import numpy as np
+from collections import defaultdict
 
 import time
 
@@ -18,6 +19,38 @@ torch.manual_seed(SEED)
 torch.cuda.manual_seed_all(SEED)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
+
+
+
+
+# Function that creates the mid to name dictionary
+def build_mid_name_dict(filepath):
+    mid_to_name = {}
+    # Read the file
+    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            parts = line.split() # split on whitespace
+            mid = parts[0]
+            name = " ".join(parts[1:]) # in case names themselves contain spaces
+            mid_to_name[mid] = name
+    return mid_to_name
+
+
+# Function that extracts the types of the entities
+def extract_types(text_triples):
+    head_types = defaultdict(set)
+    tail_types = defaultdict(set)
+    for h, r, t in text_triples:
+        paths = r.split('.')
+        first = paths[0].strip('/').split('/')
+        last = paths[-1].strip('/').split('/')
+        #print("First: ",first)
+        #print("Last: ", last)
+        head_types[h].add(first[1])
+        tail_types[t].add(last[2])
+    return head_types, tail_types
+
 
 
 def sample_negative_triples(head, tail, num_samples, all_triples, entities, relations, SEED=42):
@@ -199,7 +232,7 @@ def make_prediction(model, training, head=None, relation=None, tail=None):
 
 
 
-def compute_scores(model, training, num_candidates, num_samples, head=None, relation=None, tail=None, normalization='sigmoid', verbose=False, SEED=42):
+def compute_scores(model, training, num_candidates, num_samples, head=None, relation=None, tail=None, verbose=False, SEED=42):
 
   # Check if there is only one missing element in the triple
   if [head, relation, tail].count(None)!=1:
@@ -221,17 +254,6 @@ def compute_scores(model, training, num_candidates, num_samples, head=None, rela
   #print('IDs:')
   #print(IDs)
   #print(normalization)
-
-  # Normalize the embedding scores
-  if normalization == 'min-max':
-    min_s = model_scores.min()
-    max_s = model_scores.max()
-    model_scores = (model_scores-min_s) / (max_s-min_s)
-  elif normalization == 'sigmoid':
-    model_scores = 1/(1+np.exp(-model_scores))
-    model_scores = model_scores
-  else:
-    raise ValueError('"normalization" must be "sigmoid" or "min-max"')
 
   # Build id to entity/relation dictionaries
   id_to_entity = {id: entity for entity, id in training.entity_to_id.items()}
@@ -269,13 +291,28 @@ def compute_scores(model, training, num_candidates, num_samples, head=None, rela
     if verbose:
       print(f"Relik score = {relik_scores[i]}")
 
-    result = {
-      "model_scores": model_scores[:num_candidates].to_numpy(),
-      "relik_scores": relik_scores,
-      "prediction": pred.df[:num_candidates]
-    }
+    # Min-max model normalization
+    min_s = model_scores.min()
+    max_s = model_scores.max()
+    min_max_model = (model_scores-min_s) / (max_s-min_s)
 
-  return result
+    # Min-max ReliK normalization
+    min_r = relik_scores.min()
+    max_r = relik_scores.max()
+    min_max_relik = (relik_scores-min_r) / (max_r-min_r)
+
+    # Sigmoid model normalization
+    sigmoid_model = 1/(1+np.exp(-model_scores))
+
+    # Take the data frame of predictions with the first num_candidates candidates
+    prediction = pred.df[:num_candidates].copy()
+    # Add relik and combined score columns to the prediction df
+    prediction.loc[:,'min_max_model'] = min_max_model[:num_candidates].to_numpy()
+    prediction.loc[:,'min_max_relik'] = min_max_relik
+    prediction.loc[:,'sigmoid_model'] = sigmoid_model[:num_candidates].to_numpy()
+    prediction.loc[:,'relik'] = relik_scores
+
+  return prediction
 
 
 
@@ -421,7 +458,7 @@ def hit_at_k(pred, true_head, k):
 def evaluate_combined_scores(predictions, true_head, lambda_):
 
     # Combine model scores and ReliK scores
-    predictions['combined'] = combine_scores(predictions['norm_model'], predictions['relik'], lambda_)
+    predictions['combined'] = combine_scores(predictions['min_max_model'], predictions['min_max_relik'], lambda_)
 
     # Sort predictions by combined score
     predictions.sort_values(by=['combined'], ascending=False, inplace=True)
