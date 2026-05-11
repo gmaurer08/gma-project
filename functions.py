@@ -486,7 +486,7 @@ def hit_at_k(pred, true_head, k):
 def evaluate_combined_scores(predictions, true_head, lambda_):
 
     # Combine model scores and ReliK scores
-    predictions['combined'] = combine_scores(predictions['min_max_model'], predictions['min_max_relik'], lambda_)
+    predictions['combined'] = combine_scores(predictions['min_max_model'], predictions['relik'], lambda_)
 
     # Sort predictions by combined score
     predictions.sort_values(by=['combined'], ascending=False, inplace=True)
