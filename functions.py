@@ -284,8 +284,8 @@ def compute_scores(model, training, num_candidates, num_samples, tail_types, hea
   #print(normalization)
 
   # Build id to entity/relation dictionaries
-  id_to_entity = {id: entity for entity, id in training.entity_to_id.items()}
-  id_to_relation = {id: relation for relation, id in training.relation_to_id.items()}
+  id_to_entity = training.entity_id_to_label
+  id_to_relation = training.relation_id_to_label
 
   # Entities, relations
   entities, relations = list(id_to_entity.keys()), list(id_to_relation.keys())
@@ -319,26 +319,26 @@ def compute_scores(model, training, num_candidates, num_samples, tail_types, hea
     if verbose:
       print(f"Relik score = {relik_scores[i]}")
 
-    # Min-max model normalization
-    min_s = model_scores.min()
-    max_s = model_scores.max()
-    min_max_model = (model_scores-min_s) / (max_s-min_s)
+  # Min-max model normalization
+  min_s = model_scores.min()
+  max_s = model_scores.max()
+  min_max_model = (model_scores-min_s) / (max_s-min_s)
 
-    # Min-max ReliK normalization
-    min_r = relik_scores.min()
-    max_r = relik_scores.max()
-    min_max_relik = (relik_scores-min_r) / (max_r-min_r) if max_r-min_r!=0 else np.ones(len(relik_scores))
+  # Min-max ReliK normalization
+  min_r = relik_scores.min()
+  max_r = relik_scores.max()
+  min_max_relik = (relik_scores-min_r) / (max_r-min_r) if max_r-min_r!=0 else np.ones(len(relik_scores))
 
-    # Sigmoid model normalization
-    sigmoid_model = 1/(1+np.exp(-model_scores))
+  # Sigmoid model normalization
+  sigmoid_model = 1/(1+np.exp(-model_scores))
 
-    # Take the data frame of predictions with the first num_candidates candidates
-    prediction = df[:num_candidates].copy()
-    # Add relik and combined score columns to the prediction df
-    prediction.loc[:,'min_max_model'] = min_max_model[:num_candidates].to_numpy()
-    prediction.loc[:,'min_max_relik'] = min_max_relik
-    prediction.loc[:,'sigmoid_model'] = sigmoid_model[:num_candidates].to_numpy()
-    prediction.loc[:,'relik'] = relik_scores
+  # Take the data frame of predictions with the first num_candidates candidates
+  prediction = df[:num_candidates].copy()
+  # Add relik and combined score columns to the prediction df
+  prediction.loc[:,'min_max_model'] = min_max_model[:num_candidates].to_numpy()
+  prediction.loc[:,'min_max_relik'] = min_max_relik
+  prediction.loc[:,'sigmoid_model'] = sigmoid_model[:num_candidates].to_numpy()
+  prediction.loc[:,'relik'] = relik_scores
 
   return prediction
 
@@ -347,6 +347,32 @@ def compute_scores(model, training, num_candidates, num_samples, tail_types, hea
 
 
 
+def approximate_local_relik(tail, model, training, num_nb, num_samples, aggregation='median'):
+
+  # Get the triples that share the predicted element with the candidate triple
+  similar_triples = training.mapped_triples[training.mapped_triples[:,2]==tail]
+
+  # Get the min between num_nb and the number of similar triples
+  num_nb = min(num_nb, len(similar_triples))
+
+  # Sample num_nb times from similar_triples
+  similar_triples = random.sample(list(similar_triples), num_nb)
+
+  # Compute the ReliK score for all similar triples
+  relik_scores = np.zeros(len(similar_triples))
+
+  for i, similar_triple in enumerate(similar_triples):
+    _, relik_apx = approximate_relik(similar_triple, training, model, num_samples, SEED=SEED)
+
+    relik_scores[i] = relik_apx
+
+  # Return the median ReliK score of the similar triples
+  if aggregation=='median':
+    return np.median(relik_scores)
+  elif aggregation=='mean':
+    return np.mean(relik_scores)
+  else:
+    raise ValueError('aggregation must be "median" or "mean"')
 
 
 
@@ -354,11 +380,7 @@ def compute_scores(model, training, num_candidates, num_samples, tail_types, hea
 
 
 
-
-
-
-
-def approximate_local_relik(triple, model, training, num_nb, num_samples, entities, relations, target='head', tail=None, verbose=False):
+def approximate_local_relik2(triple, model, training, num_nb, num_samples, target='head', tail=None, verbose=False):
 
   # Make sure the value of the target variable is valid
   if target not in ['head', 'relation', 'tail']:
@@ -387,7 +409,7 @@ def approximate_local_relik(triple, model, training, num_nb, num_samples, entiti
   # Compute the ReliK score for all similar triples
   relik_scores = np.zeros(len(similar_triples))
   for i, similar_triple in enumerate(similar_triples):
-    _, relik_apx = approximate_relik(similar_triple, model, num_samples, entities, relations, training.mapped_triples)
+    _, relik_apx = approximate_relik(similar_triple, training, model, num_samples, SEED=SEED)
     if verbose:
       print(f"{i}: relik={relik_apx}")
     relik_scores[i] = relik_apx
@@ -398,7 +420,11 @@ def approximate_local_relik(triple, model, training, num_nb, num_samples, entiti
 
 
 
-def compute_scores2(model, training, num_candidates, num_nb, num_samples, head=None, relation=None, tail=None, normalization='sigmoid', verbose=False):
+
+# this function started as a general element prediction function but was adapted for tail prediction
+# so some checks in it are not needed
+
+def compute_scores2(model, training, num_candidates, num_nb, num_samples, tail_types, cache, head=None, relation=None, tail=None, verbose=False):
 
   # Check if there is only one missing element in the triple
   if [head, relation, tail].count(None)!=1:
@@ -417,23 +443,22 @@ def compute_scores2(model, training, num_candidates, num_nb, num_samples, head=N
   model_scores = df["score"]
   labels = df.filter(like="_label").iloc[:, 0]
 
+  # Filter out invalid tails
+  for row in range(len(labels)):
+    relation_str = training.relation_id_to_label[relation]
+    tail_str = df['tail_label'][row]
+    #print(f"Relation: {relation_str}, Tail: {tail_str}")
+    if not check_tail_type_valid(relation_str, tail_str, tail_types):
+      df.drop(row, inplace=True)
+
+  num_candidates = min(num_candidates, len(df))
+
   #print('IDs:')
   #print(IDs)
 
-  # Normalize the embedding scores
-  if normalization == 'min-max':
-    min_s = model_scores.min()
-    max_s = model_scores.max()
-    model_scores = (model_scores-min_s) / (max_s-min_s)
-  if normalization == 'sigmoid':
-    model_scores = 1/(1+np.exp(-model_scores))
-    model_scores = model_scores
-  else:
-    raise ValueError('"normalization" must be "sigmoid" or "min-max"')
-
   # Build id to entity/relation dictionaries
-  id_to_entity = {id: entity for entity, id in training.entity_to_id.items()}
-  id_to_relation = {id: relation for relation, id in training.relation_to_id.items()}
+  id_to_entity = training.entity_id_to_label
+  id_to_relation = training.relation_id_to_label
 
   # Entities, relations
   entities, relations = list(id_to_entity.keys()), list(id_to_relation.keys())
@@ -462,10 +487,41 @@ def compute_scores2(model, training, num_candidates, num_nb, num_samples, head=N
       print(f'\nApproximating the ReliK scores for positive triples similar to the triple {[id_to_entity[triple[0]], id_to_relation[triple[1]], id_to_entity[triple[2]]]}')
       print(f'Triple IDs = {triple}')
 
-    # Compute relik scores
-    relik_scores[i] = approximate_local_relik(triple, model, training, num_nb, num_samples, entities, relations, target, verbose=verbose)
+    # FOR TAIL PREDICTION
+    # Get the tail of the triple
+    tail = int(triple[2])
 
-  return model_scores[:num_candidates].to_numpy(), relik_scores
+    # Check the cache
+    if cache and tail in cache.keys():
+      relik_scores[i] = cache[tail]
+    else:
+      # Compute relik scores
+      relik_scores[i] = approximate_local_relik(tail, model, training, num_nb, num_samples)
+      cache[tail] = relik_scores[i]
+      #relik_scores[i] = approximate_local_relik2(triple, model, training, num_nb, num_samples, target, verbose=verbose)
+
+  # Min-max model normalization
+  min_s = model_scores.min()
+  max_s = model_scores.max()
+  min_max_model = (model_scores-min_s) / (max_s-min_s) if max_s-min_s!=0 else np.ones(len(model_scores))
+
+  # Min-max ReliK normalization
+  min_r = relik_scores.min()
+  max_r = relik_scores.max()
+  min_max_relik = (relik_scores-min_r) / (max_r-min_r) if max_r-min_r!=0 else np.ones(len(relik_scores))
+
+  # Sigmoid model normalization
+  sigmoid_model = 1/(1+np.exp(-model_scores))
+
+  # Take the data frame of predictions with the first num_candidates candidates
+  prediction = df[:num_candidates].copy()
+  # Add relik and combined score columns to the prediction df
+  prediction.loc[:,'min_max_model'] = min_max_model[:num_candidates].to_numpy()
+  prediction.loc[:,'min_max_relik'] = min_max_relik
+  prediction.loc[:,'sigmoid_model'] = sigmoid_model[:num_candidates].to_numpy()
+  prediction.loc[:,'relik'] = relik_scores
+
+  return prediction
 
 
 
