@@ -530,36 +530,43 @@ def combine_scores(model_scores, relik_scores, lambda_):
   return model_scores * lambda_ + relik_scores * (1-lambda_)
 
 
-
-
-
+def filter_triples(predictions, threshold):  
+  # Iterate over the rows
+  for row in predictions.iterrows():
+    if len(predictions)>1 and row[1]['relik']<threshold:
+      #print(predictions)
+      predictions.drop(row[0], inplace=True)
 
 # Check if the true head is in the predictions
 def hit_at_k(pred, true_head, k):
-    return int(true_head in pred[:k])
+  return int(true_head in pred[:k])
 
 # Evaluate combined scores using convex combination
-def evaluate_combined_scores(predictions, true_head, lambda_):
+def evaluate_combined_scores(predictions, true_head, lambda_, threshold=1e-4, filter=True):
 
-    # Combine model scores and ReliK scores
-    predictions['combined'] = combine_scores(predictions['min_max_model'], predictions['relik'], lambda_)
+  if filter:
+    # Filter out scores with low ReliK scores
+    filter_triples(predictions, threshold)
 
-    # Sort predictions by combined score
-    predictions.sort_values(by=['combined'], ascending=False, inplace=True)
+  # Combine model scores and ReliK scores
+  predictions['combined'] = combine_scores(predictions['min_max_model'], predictions['relik'], lambda_)
 
-    # Evaluate the hits@1 of the combined model scores
-    pred = list(predictions.filter(like="_id").iloc[:, 0])
+  # Sort predictions by combined score
+  predictions.sort_values(by=['combined'], ascending=False, inplace=True)
 
-    # See if the right prediction is in the top 1, 3, 10 candidates
-    hit_at_1 = hit_at_k(pred, true_head, 1)
-    hit_at_3 = hit_at_k(pred, true_head, 3)
-    hit_at_5 = hit_at_k(pred, true_head, 5)
-    hit_at_10 = hit_at_k(pred, true_head, 10)
+  # Evaluate the hits@1 of the combined model scores
+  pred = list(predictions.filter(like="_id").iloc[:, 0])
 
-    return {
-        'predictions': predictions,
-        'hit_at_1': hit_at_1,
-        'hit_at_3': hit_at_3,
-        'hit_at_5': hit_at_5,
-        'hit_at_10': hit_at_10
-    }
+  # See if the right prediction is in the top 1, 3, 10 candidates
+  hit_at_1 = hit_at_k(pred, true_head, 1)
+  hit_at_3 = hit_at_k(pred, true_head, 3)
+  hit_at_5 = hit_at_k(pred, true_head, 5)
+  hit_at_10 = hit_at_k(pred, true_head, 10)
+
+  return {
+      'predictions': predictions,
+      'hit_at_1': hit_at_1,
+      'hit_at_3': hit_at_3,
+      'hit_at_5': hit_at_5,
+      'hit_at_10': hit_at_10
+  }
