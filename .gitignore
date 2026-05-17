@@ -220,10 +220,9 @@ __marimo__/
 # Others
 pykeen_results/
 fb15k-237/
-results/
+#results/
 /discard.txt
-/TransE
 /FB15K-237.2.zip
 /release
-/data
+#/data
 /RotatE-20260516T223651Z-3-001.zip
