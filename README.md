@@ -10,9 +10,9 @@ The repository is structured as follows:
 
  * [main.ipynb](./main.ipynb): main notebook with all the experiments
  * [functions.py](./functions.py): Python module with the ReliK algorithm implementation and functions to run the experiments
- * [results](./results): folder containing the results obtained by the three models (TransE, RotatE, ComplEx), with the `predictions.pkl` and `combined_predictions.pkl` files representing the result of approach 1, and `predictions2.pkl`, `combined_predictions2.pkl` containing the reults for approach 2.
+ * [results](./results): folder containing the results obtained by the three models (TransE, RotatE, ComplEx), with the `predictions.pkl` and `combined_predictions.pkl` files representing the result of approach 1, and `predictions2.pkl`, `combined_predictions2.pkl` containing the results for approach 2.
  * [data](./data): folder with mid2name information and pickle files containing extracted mappings between head/tail entities and the types associated with the relations they appear in in the training set.
- * [trained models](./trained_models): folder witht the TransE, RotatE and ComplEx models trained with Pykeen on the Google Colab T4 GPU.
+ * [trained models](./trained_models): folder with the TransE, RotatE and ComplEx models trained with Pykeen on the Google Colab T4 GPU.
  * [Train_Models.ipynb](./Train_Models.ipynb): notebook used on Google Colab to train the models and pre-compute local ReliK scores for a subset of tails that appear most frequently in training set triples (these scores were used as a cache dictionary in approach 2 of the project)
  * [README.md](./README.md): current file
  * [LICENSE](./LICENSE): MIT License
