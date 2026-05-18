@@ -539,14 +539,14 @@ def hit_at_k(pred, true_head, k):
   return int(true_head in pred[:k])
 
 # Evaluate combined scores using convex combination
-def evaluate_combined_scores(predictions, true_head, lambda_, threshold=1e-4, filter=True):
+def evaluate_combined_scores(predictions, true_head, lambda_, threshold=1e-4, filter=True, model_norm='min_max_model', relik='relik'):
 
   if filter:
     # Filter out scores with low ReliK scores
     filter_triples(predictions, threshold)
 
   # Combine model scores and ReliK scores
-  predictions['combined'] = combine_scores(predictions['min_max_model'], predictions['relik'], lambda_)
+  predictions['combined'] = combine_scores(predictions[model_norm], predictions[relik], lambda_)
 
   # Sort predictions by combined score
   predictions.sort_values(by=['combined'], ascending=False, inplace=True)

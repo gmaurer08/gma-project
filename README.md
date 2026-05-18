@@ -36,6 +36,61 @@ Additional information about the entity labels and descriptions was found on Hug
 
 The goal of the project is to study **how reliability can be used to re-rank triples in tail prediction**.
 
+Two approaches were used for the re-ranking of triples using ReliK scores. Here is the first one:
+
+1. Given a $(h,r)$ pair, let the embedding model predict a list of tail candidates.
+
+2. Keep the top $C$ candidates, where $C=50$ in the code.
+
+3. Compute the ReliK scores of the triples $(h,r,t_j)$ for $j=1,\dots,C$.
+
+4. Fit the model scores to the range $[0,1]$ so that they are comparable to the ReliK scores, for example using min-max normalization or the sigmoid function.
+
+5. Combine the embedding scores and ReliK scores for each triple as follows:
+
+$$
+\operatorname{Combined}(x_{hrt_j})
+=
+\lambda \cdot \operatorname{ENC}_{\text{norm}}(x_{hrt_j})
++
+(1-\lambda)\cdot \operatorname{ReliK}_{\text{Apx}}(x_{hrt_j})
+$$
+
+6. Finally, re-rank the candidates according to the new combined scores.
+
+The idea is that, despite not knowing whether $x_{hrt_j}$ is positive, the ReliK score tells us how highly the triple ranks among known negative triples. Therefore, it can serve as an additional indicator of where the triple should appear in the final ranking.
+
+If the embedding model is locally reliable, a positive triple in the ranking should have a higher ReliK score, increasing its combined score. Conversely, a negative triple is expected to have a lower ReliK score, because the algorithm is ranking it among other negative triples.
+
+The second approach used in the project is the following:
+
+1. Given a $(h,r)$ pair, let the embedding model predict a list of tail candidates.
+
+2. Keep the top $C$ candidates, where $C=20$ in the code.
+
+3. For each candidate triple $(h,r,t_j)$, with $j=1,\dots,C$, sample $p$ times from the positive neighbourhood of the node corresponding to tail $t_j$, where $p=30$ in the code.
+
+4. For each positive triple in $t_j$'s neighbourhood, compute its ReliK score.
+
+5. Aggregate the ReliK scores by $t_j$ using the median or mean.
+
+6. Fit the model scores to the range $[0,1]$ so that they are comparable to the ReliK scores, for example using min-max normalization or the sigmoid function.
+
+7. Combine the embedding scores and local ReliK scores for each triple as follows:
+
+$$
+\operatorname{Combined}(x_{hrt_j})
+=
+\lambda \cdot \operatorname{ENC}(x_{hrt_j})
++
+(1-\lambda)\cdot \operatorname{ReliK}_{\text{Apx}}\left(\left(N^+(t_j)\right)_p\right)
+$$
+
+8. Finally, re-rank the candidates according to the new combined scores.
+
+The idea is that, if a tail node's neighbourhood has several triples with high ReliK scores, it is more likely that positive triples in this subgraph have reliable embedding scores. Therefore, the aggregated positive neighbourhood score will improve the ranking of that candidate.
+
+The opposite will happen for neighbourhoods with low ReliK scores.
 
 ## References
 
