@@ -37,8 +37,6 @@ Additional information about the entity labels and descriptions was found on Hug
 The goal of the project is to study **how reliability can be used to re-rank triples in tail prediction**.
 
 
-
-
 ## References
 
 [1] Maximilian K. Egger, Wenyue Ma, Davide Mottin, Panagiotis Karras, Ilaria Bordino, Francesco Gullo and Aris Anagnostopoulos. *ReliK:  A Reliability Measure for Knowledge Graph
