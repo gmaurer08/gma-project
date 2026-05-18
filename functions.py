@@ -377,9 +377,6 @@ def approximate_local_relik(tail, model, training, num_nb, num_samples, aggregat
 
 
 
-
-
-
 def approximate_local_relik2(triple, model, training, num_nb, num_samples, target='head', tail=None, verbose=False):
 
   # Make sure the value of the target variable is valid
