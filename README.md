@@ -49,11 +49,7 @@ Two approaches were used for the re-ranking of triples using ReliK scores. Here 
 5. Combine the embedding scores and ReliK scores for each triple as follows:
 
 $$
-\operatorname{Combined}(x_{hrt_j})
-=
-\lambda \cdot \operatorname{ENC}_{\text{norm}}(x_{hrt_j})
-+
-(1-\lambda)\cdot \operatorname{ReliK}_{\text{Apx}}(x_{hrt_j})
+\text{Combined}(x_{hrt_j}) = \lambda \cdot \text{ENC}_{\text{norm}}(x_{hrt_j})+ (1-\lambda)\cdot \text{ReliK}_{\text{Apx}}(x_{hrt_j})
 $$
 
 6. Finally, re-rank the candidates according to the new combined scores.
@@ -79,11 +75,7 @@ The second approach used in the project is the following:
 7. Combine the embedding scores and local ReliK scores for each triple as follows:
 
 $$
-\operatorname{Combined}(x_{hrt_j})
-=
-\lambda \cdot \operatorname{ENC}(x_{hrt_j})
-+
-(1-\lambda)\cdot \operatorname{ReliK}_{\text{Apx}}\left(\left(N^+(t_j)\right)_p\right)
+\text{Combined}(x_{hrt_j})= \lambda \cdot \text{ENC}(x_{hrt_j})+ (1-\lambda)\cdot \text{ReliK}_{\text{Apx}}\left(\left(N^+(t_j)\right)_p\right)
 $$
 
 8. Finally, re-rank the candidates according to the new combined scores.
