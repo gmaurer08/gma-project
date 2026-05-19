@@ -567,3 +567,40 @@ def evaluate_combined_scores(predictions, true_head, lambda_, threshold=1e-4, fi
       'hit_at_5': hit_at_5,
       'hit_at_10': hit_at_10
   }
+
+
+#Function that describes the hits@k by lambda data frame via summary statistics
+def describe_results(df):
+
+    summary_dicts = []
+    
+    # Extraxt the max Hits@k for every k=1,3,5,10 and find the associated lambda
+    for k in [1,3,5,10]:
+        # Summary statistics
+        mean_hits_at_k = df['Hits@'+str(k)].mean()
+        median_hits_at_k = df['Hits@'+str(k)].median()
+        std_hits_at_k = df['Hits@'+str(k)].std()
+        # Max hits@k by lambda
+        max_hits_at_k = df['Hits@'+str(k)].max()
+        first_max_hits_at_k_lambda = df[df['Hits@'+str(k)]==max_hits_at_k]['Lambda'].iloc[0]
+        last_max_hits_at_k_lambda = df[df['Hits@'+str(k)]==max_hits_at_k]['Lambda'].iloc[-1]
+        # Min hits@k by lambda
+        min_hits_at_k = df['Hits@'+str(k)].min()
+        first_min_hits_at_k_lambda = df[df['Hits@'+str(k)]==min_hits_at_k]['Lambda'].iloc[0]
+        last_min_hits_at_k_lambda = df[df['Hits@'+str(k)]==min_hits_at_k]['Lambda'].iloc[-1]
+        
+        summary_dicts.append({
+            'k': k, 
+            'max': max_hits_at_k,
+            'max_first_lambda': first_max_hits_at_k_lambda,
+            'max_last_lambda': last_max_hits_at_k_lambda,
+            'min': min_hits_at_k,
+            'min_first_lambda': first_min_hits_at_k_lambda,
+            'min_last_lambda': last_min_hits_at_k_lambda,
+            'mean':mean_hits_at_k,
+            'median':median_hits_at_k,
+            'std':std_hits_at_k
+            })
+
+    res = pd.DataFrame(summary_dicts, columns=['k', 'max', 'max_first_lambda', 'max_last_lambda', 'min', 'min_first_lambda', 'min_last_lambda', 'mean', 'median', 'std'])
+    return res
